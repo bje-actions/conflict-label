@@ -1,43 +1,168 @@
 import * as core from '@actions/core';
 
 /**
- * Reads an HTTP status off an unknown error value.
+ * An error a maintainer can fix by changing the workflow: a bad input, a token
+ * that cannot see the pull request, a missing permissions block.
+ */
+export class ConfigurationError extends Error {
+  override readonly name: string = 'ConfigurationError';
+}
+
+/** A malformed action input. */
+export class InputError extends ConfigurationError {
+  override readonly name = 'InputError';
+}
+
+interface ErrorShape {
+  status?: unknown;
+  message?: unknown;
+  cause?: unknown;
+  errors?: unknown;
+  request?: { method?: unknown; url?: unknown } | undefined;
+  response?: { status?: unknown; headers?: Record<string, unknown>; data?: unknown } | undefined;
+}
+
+function shapeOf(error: unknown): ErrorShape {
+  return typeof error === 'object' && error !== null ? (error as ErrorShape) : {};
+}
+
+/**
+ * Reads an HTTP status off an unknown error value. Octokit puts it on the error
+ * itself; some wrappers only carry the response.
  */
 export function statusOf(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('status' in error)) {
-    return undefined;
+  const shape = shapeOf(error);
+  if (typeof shape.status === 'number') {
+    return shape.status;
   }
-  const status = (error as { status: unknown }).status;
-  return typeof status === 'number' ? status : undefined;
+  if (typeof shape.response?.status === 'number') {
+    return shape.response.status;
+  }
+  return undefined;
+}
+
+interface GraphqlError {
+  type?: string;
+  message?: string;
 }
 
 /**
- * 401 and 403 are deterministic configuration errors: a bad token, or a
- * workflow that does not declare the permissions the action needs. Every other
- * error is transient or unexpected and must not block a merge.
+ * A failed GraphQL query is an HTTP 200 carrying an `errors` array, so it never
+ * has a status and has to be classified on the error types instead.
  */
-export function isConfigurationError(error: unknown): boolean {
-  const status = statusOf(error);
-  return status === 401 || status === 403;
+export function graphqlErrorsOf(error: unknown): GraphqlError[] {
+  const shape = shapeOf(error);
+  const errors = Array.isArray(shape.errors)
+    ? shape.errors
+    : Array.isArray(shapeOf(shape.response).errors)
+      ? (shapeOf(shape.response).errors as unknown[])
+      : [];
+  return errors.filter(
+    (entry): entry is GraphqlError => typeof entry === 'object' && entry !== null,
+  );
 }
+
+/** GraphQL error types that mean the token or the permissions block is wrong. */
+const CONFIGURATION_GRAPHQL_TYPES = new Set(['FORBIDDEN', 'INSUFFICIENT_SCOPES', 'NOT_FOUND']);
 
 export function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.message;
+  }
+  const shape = shapeOf(error);
+  if (typeof shape.message === 'string' && shape.message !== '') {
+    return shape.message;
+  }
+  const text = String(error);
+  return text === '[object Object]' ? JSON.stringify(error) : text;
 }
 
 /**
- * The reliability contract. This check gates every merge with no bypass, so it
- * fails closed only for errors a maintainer can actually fix, and fails open
+ * A 403 is ambiguous: GitHub returns it both for a token that lacks a scope and
+ * for a rate limit it has already refused to serve. Only the first is a
+ * configuration error.
+ */
+export function isRateLimited(error: unknown): boolean {
+  if (/rate limit/i.test(messageOf(error))) {
+    return true;
+  }
+  const headers = shapeOf(error).response?.headers ?? {};
+  return headers['x-ratelimit-remaining'] === '0' || headers['retry-after'] !== undefined;
+}
+
+/**
+ * 401 and 403 are treated as configuration errors: a bad token, or a workflow
+ * that does not declare the permissions the action needs. Rate-limit 403s are
+ * excluded above.
+ */
+export function isConfigurationError(error: unknown): boolean {
+  if (error instanceof ConfigurationError) {
+    return true;
+  }
+  const status = statusOf(error);
+  if (status === 403 && isRateLimited(error)) {
+    return false;
+  }
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  return graphqlErrorsOf(error).some(
+    (entry) => typeof entry.type === 'string' && CONFIGURATION_GRAPHQL_TYPES.has(entry.type),
+  );
+}
+
+/** Everything known about an error, so no annotation is ever empty. */
+export function describeError(error: unknown): string {
+  const shape = shapeOf(error);
+  const parts = [messageOf(error)];
+
+  const status = statusOf(error);
+  if (status !== undefined) {
+    parts.push(`status ${status}`);
+  }
+
+  const request = shape.request;
+  if (request?.method !== undefined || request?.url !== undefined) {
+    parts.push(`request ${String(request?.method ?? 'GET')} ${String(request?.url ?? 'unknown')}`);
+  }
+
+  const cause = shape.cause;
+  if (cause !== undefined && cause !== null) {
+    parts.push(`cause ${messageOf(cause)}`);
+  }
+
+  const graphql = graphqlErrorsOf(error)
+    .map((entry) => `${entry.type ?? 'ERROR'}: ${entry.message ?? 'no message'}`)
+    .join('; ');
+  if (graphql !== '') {
+    parts.push(`GraphQL ${graphql}`);
+  }
+
+  return parts.join(', ');
+}
+
+/**
+ * This action is designed to be deployed as a required check with no bypass, so
+ * it fails closed only for errors a maintainer can actually fix, and fails open
  * for everything else.
  */
-export function applyErrorPolicy(error: unknown): void {
-  const message = messageOf(error);
+export function applyErrorPolicy(error: unknown, eventName?: string): void {
+  const description = describeError(error);
+
   if (isConfigurationError(error)) {
+    const hint =
+      statusOf(error) === 403 && eventName === 'pull_request'
+        ? ' Fork pull requests need this action to run on pull_request_target.'
+        : '';
+    core.setOutput('outcome', 'failed');
     core.setFailed(
-      `conflict-label could not authenticate to the GitHub API (${statusOf(error)}): ${message}. ` +
-        'Check the token input and the workflow permissions block (pull-requests: write, issues: write).',
+      `conflict-label could not talk to the GitHub API: ${description}. ` +
+        'Check the token input and the workflow permissions block (pull-requests: write, issues: write).' +
+        hint,
     );
     return;
   }
-  core.warning(`conflict-label did not complete and is passing anyway: ${message}`);
+
+  core.setOutput('outcome', 'failed-open');
+  core.warning(`conflict-label did not complete and is passing anyway: ${description}`);
 }

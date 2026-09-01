@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { retry } from '@octokit/plugin-retry';
 import { throttling } from '@octokit/plugin-throttling';
-import { statusOf } from './policy';
+import { ConfigurationError, statusOf } from './policy';
 
 /** How many times a rate limited request is retried before giving up. */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -23,10 +23,15 @@ export function onRateLimit(
   _octokit: unknown,
   retryCount: number,
 ): boolean {
-  core.warning(
-    `Rate limited on ${options.method ?? 'GET'} ${options.url ?? 'unknown'}, retrying in ${retryAfter}s.`,
-  );
-  return retryCount < MAX_RATE_LIMIT_RETRIES;
+  const target = `${options.method ?? 'GET'} ${options.url ?? 'unknown'}`;
+  if (retryCount >= MAX_RATE_LIMIT_RETRIES) {
+    core.warning(
+      `Rate limited on ${target} and the budget of ${MAX_RATE_LIMIT_RETRIES} retries is spent, giving up.`,
+    );
+    return false;
+  }
+  core.warning(`Rate limited on ${target}, retrying in ${retryAfter}s.`);
+  return true;
 }
 
 export function createOctokit(token: string): ReturnType<typeof getOctokit> {
@@ -61,6 +66,10 @@ interface MergeStateResponse {
   } | null;
 }
 
+interface LabelListResponse {
+  data?: unknown;
+}
+
 export interface OctokitLike {
   graphql: (query: string, variables: Record<string, unknown>) => Promise<unknown>;
   request: (route: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -72,7 +81,25 @@ export interface PullRequestClient {
   removeLabel(prNumber: number, label: string): Promise<void>;
 }
 
+function labelNamesOf(response: unknown): string[] {
+  const data = (response as LabelListResponse | undefined)?.data;
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data
+    .map((entry) => (entry as { name?: unknown } | null)?.name)
+    .filter((name): name is string => typeof name === 'string');
+}
+
+/** GitHub says exactly this when the label is not on the pull request. */
+function isLabelNotApplied(error: unknown): boolean {
+  const data = (error as { response?: { data?: { message?: unknown } } } | null)?.response?.data;
+  return data?.message === 'Label does not exist';
+}
+
 export function createClient(octokit: OctokitLike, repo: Repo): PullRequestClient {
+  const slug = `${repo.owner}/${repo.repo}`;
+
   return {
     async mergeStateStatus(prNumber) {
       const data = (await octokit.graphql(MERGE_STATE_QUERY, {
@@ -80,17 +107,38 @@ export function createClient(octokit: OctokitLike, repo: Repo): PullRequestClien
         repo: repo.repo,
         number: prNumber,
       })) as MergeStateResponse;
-      return data?.repository?.pullRequest?.mergeStateStatus ?? 'UNKNOWN';
+
+      const pullRequest = data?.repository?.pullRequest;
+      if (data?.repository == null || pullRequest == null) {
+        // A readable token would have returned the node, so this is a wrong
+        // repository, a wrong number, or a token that cannot see either.
+        throw new ConfigurationError(`Pull request #${prNumber} not found in ${slug}.`);
+      }
+
+      // Only an unresolved mergeability check is genuinely UNKNOWN.
+      return pullRequest.mergeStateStatus ?? 'UNKNOWN';
     },
 
     async addLabel(prNumber, label) {
-      // The issues endpoint creates the label when it does not exist yet.
-      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-        owner: repo.owner,
-        repo: repo.repo,
-        issue_number: prNumber,
-        labels: [label],
-      });
+      // GitHub creates a missing label on the fly (default colour) when it is
+      // added through the issues labels endpoint, so no separate create-label
+      // call is needed.
+      const response = await octokit.request(
+        'POST /repos/{owner}/{repo}/issues/{issue_number}/labels',
+        {
+          owner: repo.owner,
+          repo: repo.repo,
+          issue_number: prNumber,
+          labels: [label],
+        },
+      );
+
+      const names = labelNamesOf(response);
+      if (!names.includes(label)) {
+        core.warning(
+          `Asked GitHub to add "${label}" to #${prNumber} but it reported the labels [${names.join(', ')}].`,
+        );
+      }
     },
 
     async removeLabel(prNumber, label) {
@@ -102,8 +150,10 @@ export function createClient(octokit: OctokitLike, repo: Repo): PullRequestClien
           name: label,
         });
       } catch (error) {
-        // The label was not applied, which is the state we wanted anyway.
-        if (statusOf(error) === 404) {
+        // 404 means the label is not on the pull request, which is the state we
+        // wanted anyway. Any other 404 is about the pull request itself.
+        if (statusOf(error) === 404 && isLabelNotApplied(error)) {
+          core.info(`Label "${label}" was not on pull request #${prNumber}.`);
           return;
         }
         throw error;

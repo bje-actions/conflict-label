@@ -30879,16 +30879,16 @@ function file_command_issueFileCommand(command, message) {
     if (!filePath) {
         throw new Error(`Unable to find environment variable for file command ${command}`);
     }
-    if (!fs.existsSync(filePath)) {
+    if (!external_fs_namespaceObject.existsSync(filePath)) {
         throw new Error(`Missing file at path: ${filePath}`);
     }
-    fs.appendFileSync(filePath, `${toCommandValue(message)}${os.EOL}`, {
+    external_fs_namespaceObject.appendFileSync(filePath, `${utils_toCommandValue(message)}${external_os_namespaceObject.EOL}`, {
         encoding: 'utf8'
     });
 }
 function file_command_prepareKeyValueMessage(key, value) {
-    const delimiter = `ghadelimiter_${crypto.randomUUID()}`;
-    const convertedValue = toCommandValue(value);
+    const delimiter = `ghadelimiter_${external_crypto_namespaceObject.randomUUID()}`;
+    const convertedValue = utils_toCommandValue(value);
     // These should realistically never happen, but just in case someone finds a
     // way to exploit uuid generation let's not allow keys or values that contain
     // the delimiter.
@@ -30898,7 +30898,7 @@ function file_command_prepareKeyValueMessage(key, value) {
     if (convertedValue.includes(delimiter)) {
         throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
     }
-    return `${key}<<${delimiter}${os.EOL}${convertedValue}${os.EOL}${delimiter}`;
+    return `${key}<<${delimiter}${external_os_namespaceObject.EOL}${convertedValue}${external_os_namespaceObject.EOL}${delimiter}`;
 }
 //# sourceMappingURL=file-command.js.map
 ;// CONCATENATED MODULE: external "path"
@@ -33520,10 +33520,10 @@ function getBooleanInput(name, options) {
 function setOutput(name, value) {
     const filePath = process.env['GITHUB_OUTPUT'] || '';
     if (filePath) {
-        return issueFileCommand('OUTPUT', prepareKeyValueMessage(name, value));
+        return file_command_issueFileCommand('OUTPUT', file_command_prepareKeyValueMessage(name, value));
     }
-    process.stdout.write(os.EOL);
-    issueCommand('set-output', { name }, toCommandValue(value));
+    process.stdout.write(external_os_namespaceObject.EOL);
+    command_issueCommand('set-output', { name }, utils_toCommandValue(value));
 }
 /**
  * Enables or disables the echoing of commands into stdout for the rest of the step.
@@ -38886,40 +38886,132 @@ throttling.triggersNotification = triggersNotification;
 ;// CONCATENATED MODULE: ./build/policy.js
 
 /**
- * Reads an HTTP status off an unknown error value.
+ * An error a maintainer can fix by changing the workflow: a bad input, a token
+ * that cannot see the pull request, a missing permissions block.
+ */
+class ConfigurationError extends Error {
+    name = 'ConfigurationError';
+}
+/** A malformed action input. */
+class InputError extends ConfigurationError {
+    name = 'InputError';
+}
+function shapeOf(error) {
+    return typeof error === 'object' && error !== null ? error : {};
+}
+/**
+ * Reads an HTTP status off an unknown error value. Octokit puts it on the error
+ * itself; some wrappers only carry the response.
  */
 function statusOf(error) {
-    if (typeof error !== 'object' || error === null || !('status' in error)) {
-        return undefined;
+    const shape = shapeOf(error);
+    if (typeof shape.status === 'number') {
+        return shape.status;
     }
-    const status = error.status;
-    return typeof status === 'number' ? status : undefined;
+    if (typeof shape.response?.status === 'number') {
+        return shape.response.status;
+    }
+    return undefined;
 }
 /**
- * 401 and 403 are deterministic configuration errors: a bad token, or a
- * workflow that does not declare the permissions the action needs. Every other
- * error is transient or unexpected and must not block a merge.
+ * A failed GraphQL query is an HTTP 200 carrying an `errors` array, so it never
+ * has a status and has to be classified on the error types instead.
+ */
+function graphqlErrorsOf(error) {
+    const shape = shapeOf(error);
+    const errors = Array.isArray(shape.errors)
+        ? shape.errors
+        : Array.isArray(shapeOf(shape.response).errors)
+            ? shapeOf(shape.response).errors
+            : [];
+    return errors.filter((entry) => typeof entry === 'object' && entry !== null);
+}
+/** GraphQL error types that mean the token or the permissions block is wrong. */
+const CONFIGURATION_GRAPHQL_TYPES = new Set(['FORBIDDEN', 'INSUFFICIENT_SCOPES', 'NOT_FOUND']);
+function messageOf(error) {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    const shape = shapeOf(error);
+    if (typeof shape.message === 'string' && shape.message !== '') {
+        return shape.message;
+    }
+    const text = String(error);
+    return text === '[object Object]' ? JSON.stringify(error) : text;
+}
+/**
+ * A 403 is ambiguous: GitHub returns it both for a token that lacks a scope and
+ * for a rate limit it has already refused to serve. Only the first is a
+ * configuration error.
+ */
+function isRateLimited(error) {
+    if (/rate limit/i.test(messageOf(error))) {
+        return true;
+    }
+    const headers = shapeOf(error).response?.headers ?? {};
+    return headers['x-ratelimit-remaining'] === '0' || headers['retry-after'] !== undefined;
+}
+/**
+ * 401 and 403 are treated as configuration errors: a bad token, or a workflow
+ * that does not declare the permissions the action needs. Rate-limit 403s are
+ * excluded above.
  */
 function isConfigurationError(error) {
+    if (error instanceof ConfigurationError) {
+        return true;
+    }
     const status = statusOf(error);
-    return status === 401 || status === 403;
+    if (status === 403 && isRateLimited(error)) {
+        return false;
+    }
+    if (status === 401 || status === 403) {
+        return true;
+    }
+    return graphqlErrorsOf(error).some((entry) => typeof entry.type === 'string' && CONFIGURATION_GRAPHQL_TYPES.has(entry.type));
 }
-function messageOf(error) {
-    return error instanceof Error ? error.message : String(error);
+/** Everything known about an error, so no annotation is ever empty. */
+function describeError(error) {
+    const shape = shapeOf(error);
+    const parts = [messageOf(error)];
+    const status = statusOf(error);
+    if (status !== undefined) {
+        parts.push(`status ${status}`);
+    }
+    const request = shape.request;
+    if (request?.method !== undefined || request?.url !== undefined) {
+        parts.push(`request ${String(request?.method ?? 'GET')} ${String(request?.url ?? 'unknown')}`);
+    }
+    const cause = shape.cause;
+    if (cause !== undefined && cause !== null) {
+        parts.push(`cause ${messageOf(cause)}`);
+    }
+    const graphql = graphqlErrorsOf(error)
+        .map((entry) => `${entry.type ?? 'ERROR'}: ${entry.message ?? 'no message'}`)
+        .join('; ');
+    if (graphql !== '') {
+        parts.push(`GraphQL ${graphql}`);
+    }
+    return parts.join(', ');
 }
 /**
- * The reliability contract. This check gates every merge with no bypass, so it
- * fails closed only for errors a maintainer can actually fix, and fails open
+ * This action is designed to be deployed as a required check with no bypass, so
+ * it fails closed only for errors a maintainer can actually fix, and fails open
  * for everything else.
  */
-function applyErrorPolicy(error) {
-    const message = messageOf(error);
+function applyErrorPolicy(error, eventName) {
+    const description = describeError(error);
     if (isConfigurationError(error)) {
-        setFailed(`conflict-label could not authenticate to the GitHub API (${statusOf(error)}): ${message}. ` +
-            'Check the token input and the workflow permissions block (pull-requests: write, issues: write).');
+        const hint = statusOf(error) === 403 && eventName === 'pull_request'
+            ? ' Fork pull requests need this action to run on pull_request_target.'
+            : '';
+        setOutput('outcome', 'failed');
+        setFailed(`conflict-label could not talk to the GitHub API: ${description}. ` +
+            'Check the token input and the workflow permissions block (pull-requests: write, issues: write).' +
+            hint);
         return;
     }
-    warning(`conflict-label did not complete and is passing anyway: ${message}`);
+    setOutput('outcome', 'failed-open');
+    warning(`conflict-label did not complete and is passing anyway: ${description}`);
 }
 
 ;// CONCATENATED MODULE: ./build/github.js
@@ -38931,8 +39023,13 @@ function applyErrorPolicy(error) {
 /** How many times a rate limited request is retried before giving up. */
 const MAX_RATE_LIMIT_RETRIES = 3;
 function onRateLimit(retryAfter, options, _octokit, retryCount) {
-    warning(`Rate limited on ${options.method ?? 'GET'} ${options.url ?? 'unknown'}, retrying in ${retryAfter}s.`);
-    return retryCount < MAX_RATE_LIMIT_RETRIES;
+    const target = `${options.method ?? 'GET'} ${options.url ?? 'unknown'}`;
+    if (retryCount >= MAX_RATE_LIMIT_RETRIES) {
+        warning(`Rate limited on ${target} and the budget of ${MAX_RATE_LIMIT_RETRIES} retries is spent, giving up.`);
+        return false;
+    }
+    warning(`Rate limited on ${target}, retrying in ${retryAfter}s.`);
+    return true;
 }
 function createOctokit(token) {
     return getOctokit(token, {
@@ -38951,7 +39048,22 @@ const MERGE_STATE_QUERY = `
     }
   }
 `;
+function labelNamesOf(response) {
+    const data = response?.data;
+    if (!Array.isArray(data)) {
+        return [];
+    }
+    return data
+        .map((entry) => entry?.name)
+        .filter((name) => typeof name === 'string');
+}
+/** GitHub says exactly this when the label is not on the pull request. */
+function isLabelNotApplied(error) {
+    const data = error?.response?.data;
+    return data?.message === 'Label does not exist';
+}
 function createClient(octokit, repo) {
+    const slug = `${repo.owner}/${repo.repo}`;
     return {
         async mergeStateStatus(prNumber) {
             const data = (await octokit.graphql(MERGE_STATE_QUERY, {
@@ -38959,16 +39071,29 @@ function createClient(octokit, repo) {
                 repo: repo.repo,
                 number: prNumber,
             }));
-            return data?.repository?.pullRequest?.mergeStateStatus ?? 'UNKNOWN';
+            const pullRequest = data?.repository?.pullRequest;
+            if (data?.repository == null || pullRequest == null) {
+                // A readable token would have returned the node, so this is a wrong
+                // repository, a wrong number, or a token that cannot see either.
+                throw new ConfigurationError(`Pull request #${prNumber} not found in ${slug}.`);
+            }
+            // Only an unresolved mergeability check is genuinely UNKNOWN.
+            return pullRequest.mergeStateStatus ?? 'UNKNOWN';
         },
         async addLabel(prNumber, label) {
-            // The issues endpoint creates the label when it does not exist yet.
-            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+            // GitHub creates a missing label on the fly (default colour) when it is
+            // added through the issues labels endpoint, so no separate create-label
+            // call is needed.
+            const response = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
                 owner: repo.owner,
                 repo: repo.repo,
                 issue_number: prNumber,
                 labels: [label],
             });
+            const names = labelNamesOf(response);
+            if (!names.includes(label)) {
+                warning(`Asked GitHub to add "${label}" to #${prNumber} but it reported the labels [${names.join(', ')}].`);
+            }
         },
         async removeLabel(prNumber, label) {
             try {
@@ -38980,8 +39105,10 @@ function createClient(octokit, repo) {
                 });
             }
             catch (error) {
-                // The label was not applied, which is the state we wanted anyway.
-                if (statusOf(error) === 404) {
+                // 404 means the label is not on the pull request, which is the state we
+                // wanted anyway. Any other 404 is about the pull request itself.
+                if (statusOf(error) === 404 && isLabelNotApplied(error)) {
+                    info(`Label "${label}" was not on pull request #${prNumber}.`);
                     return;
                 }
                 throw error;
@@ -38995,6 +39122,8 @@ function createClient(octokit, repo) {
 
 const CONFLICTING = 'DIRTY';
 const UNKNOWN = 'UNKNOWN';
+const DEFAULT_LABEL = 'conflicting';
+const DEFAULT_POLL_SECONDS = 120;
 const sleep = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
 });
@@ -39003,18 +39132,36 @@ function backoffMs(attempt) {
     return Math.min(2 ** attempt * 1000, 15_000);
 }
 /**
- * Turns raw action inputs plus the webhook context into run options. The
- * pr-number input wins so the smoke test and workflow_call callers can target
- * a pull request explicitly.
+ * Action inputs are always strings, and a plausible looking value such as "2m"
+ * would otherwise become NaN and turn the poll loop into an infinite one.
  */
+function parseCount(value, name) {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) {
+        throw new InputError(`Input "${name}" must be a whole number of zero or more, got "${value}".`);
+    }
+    return Number(trimmed);
+}
+function resolveToken(value) {
+    const token = value.trim();
+    if (token === '') {
+        throw new InputError('Input "token" is empty. Pass a token with pull-requests: write.');
+    }
+    return token;
+}
 function resolveOptions(inputs, ctx) {
-    const fromContext = ctx.payload.pull_request?.number;
-    const prNumber = inputs.prNumber ? Number(inputs.prNumber) : fromContext;
+    // An explicit pr-number input overrides the pull request in the webhook
+    // payload, for events that carry no pull request.
+    const prNumber = inputs.prNumber.trim()
+        ? parseCount(inputs.prNumber, 'pr-number')
+        : ctx.payload.pull_request?.number;
     return {
         eventName: ctx.eventName,
         prNumber,
-        label: inputs.label || 'conflicting',
-        pollSeconds: Number(inputs.pollSeconds || '120'),
+        label: inputs.label.trim() || DEFAULT_LABEL,
+        pollSeconds: inputs.pollSeconds.trim()
+            ? parseCount(inputs.pollSeconds, 'poll-seconds')
+            : DEFAULT_POLL_SECONDS,
     };
 }
 /**
@@ -39024,6 +39171,9 @@ function resolveOptions(inputs, ctx) {
  */
 async function resolveMergeState(client, prNumber, pollSeconds, sleepFn) {
     const deadline = Date.now() + pollSeconds * 1000;
+    if (!Number.isFinite(deadline)) {
+        throw new InputError(`Cannot poll for ${pollSeconds} seconds.`);
+    }
     let attempt = 0;
     let status = await client.mergeStateStatus(prNumber);
     while (status === UNKNOWN) {
@@ -39038,31 +39188,38 @@ async function resolveMergeState(client, prNumber, pollSeconds, sleepFn) {
     }
     return status;
 }
-async function run(options, client, sleepFn = sleep) {
+/** The decision itself. Throws; the caller applies the error policy. */
+async function syncLabel(options, client, sleepFn) {
+    if (options.eventName === 'merge_group') {
+        info('merge_group event, nothing to label.');
+        return;
+    }
+    if (options.prNumber === undefined) {
+        info('No pull request in context, nothing to label.');
+        return;
+    }
+    const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
+    if (status === UNKNOWN) {
+        notice(`Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`);
+        return;
+    }
+    if (status === CONFLICTING) {
+        await client.addLabel(options.prNumber, options.label);
+        info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
+        return;
+    }
+    await client.removeLabel(options.prNumber, options.label);
+    info(`Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`);
+}
+async function run(inputs, ctx, deps) {
     try {
-        if (options.eventName === 'merge_group') {
-            info('merge_group event, nothing to label.');
-            return;
-        }
-        if (options.prNumber === undefined) {
-            info('No pull request in context, nothing to label.');
-            return;
-        }
-        const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
-        if (status === UNKNOWN) {
-            notice(`Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`);
-            return;
-        }
-        if (status === CONFLICTING) {
-            await client.addLabel(options.prNumber, options.label);
-            info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
-            return;
-        }
-        await client.removeLabel(options.prNumber, options.label);
-        info(`Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`);
+        const options = resolveOptions(inputs, ctx);
+        const client = deps.createClient(resolveToken(inputs.token));
+        await syncLabel(options, client, deps.sleep ?? sleep);
+        setOutput('outcome', 'completed');
     }
     catch (error) {
-        applyErrorPolicy(error);
+        applyErrorPolicy(error, ctx.eventName);
     }
 }
 
@@ -39072,19 +39229,16 @@ async function run(options, client, sleepFn = sleep) {
 
 
 
-async function main() {
-    const options = resolveOptions({
-        label: getInput('label'),
-        pollSeconds: getInput('poll-seconds'),
-        prNumber: getInput('pr-number'),
-    }, github_context);
-    const client = createClient(createOctokit(getInput('token', { required: true })), {
-        owner: github_context.repo.owner,
-        repo: github_context.repo.repo,
-    });
-    await run(options, client);
-}
-main().catch(applyErrorPolicy);
+run({
+    label: getInput('label'),
+    pollSeconds: getInput('poll-seconds'),
+    prNumber: getInput('pr-number'),
+    token: getInput('token'),
+}, github_context, {
+    createClient: (token) => createClient(createOctokit(token), { owner: github_context.repo.owner, repo: github_context.repo.repo }),
+}).catch((error) => {
+    applyErrorPolicy(error, github_context.eventName);
+});
 
 })();
 

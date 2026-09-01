@@ -1,9 +1,12 @@
 import * as core from '@actions/core';
 import type { PullRequestClient } from './github';
-import { applyErrorPolicy } from './policy';
+import { applyErrorPolicy, InputError } from './policy';
 
 export const CONFLICTING = 'DIRTY';
 export const UNKNOWN = 'UNKNOWN';
+
+export const DEFAULT_LABEL = 'conflicting';
+export const DEFAULT_POLL_SECONDS = 120;
 
 export type Sleep = (ms: number) => Promise<void>;
 
@@ -21,6 +24,7 @@ export interface ActionInputs {
   label: string;
   pollSeconds: string;
   prNumber: string;
+  token: string;
 }
 
 export interface ActionContext {
@@ -28,27 +32,53 @@ export interface ActionContext {
   payload: { pull_request?: { number?: number } | undefined };
 }
 
-/**
- * Turns raw action inputs plus the webhook context into run options. The
- * pr-number input wins so the smoke test and workflow_call callers can target
- * a pull request explicitly.
- */
-export function resolveOptions(inputs: ActionInputs, ctx: ActionContext): RunOptions {
-  const fromContext = ctx.payload.pull_request?.number;
-  const prNumber = inputs.prNumber ? Number(inputs.prNumber) : fromContext;
-  return {
-    eventName: ctx.eventName,
-    prNumber,
-    label: inputs.label || 'conflicting',
-    pollSeconds: Number(inputs.pollSeconds || '120'),
-  };
-}
-
 export interface RunOptions {
   eventName: string;
   prNumber: number | undefined;
   label: string;
   pollSeconds: number;
+}
+
+export interface RunDeps {
+  createClient: (token: string) => PullRequestClient;
+  sleep?: Sleep;
+}
+
+/**
+ * Action inputs are always strings, and a plausible looking value such as "2m"
+ * would otherwise become NaN and turn the poll loop into an infinite one.
+ */
+export function parseCount(value: string, name: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new InputError(`Input "${name}" must be a whole number of zero or more, got "${value}".`);
+  }
+  return Number(trimmed);
+}
+
+export function resolveToken(value: string): string {
+  const token = value.trim();
+  if (token === '') {
+    throw new InputError('Input "token" is empty. Pass a token with pull-requests: write.');
+  }
+  return token;
+}
+
+export function resolveOptions(inputs: ActionInputs, ctx: ActionContext): RunOptions {
+  // An explicit pr-number input overrides the pull request in the webhook
+  // payload, for events that carry no pull request.
+  const prNumber = inputs.prNumber.trim()
+    ? parseCount(inputs.prNumber, 'pr-number')
+    : ctx.payload.pull_request?.number;
+
+  return {
+    eventName: ctx.eventName,
+    prNumber,
+    label: inputs.label.trim() || DEFAULT_LABEL,
+    pollSeconds: inputs.pollSeconds.trim()
+      ? parseCount(inputs.pollSeconds, 'poll-seconds')
+      : DEFAULT_POLL_SECONDS,
+  };
 }
 
 /**
@@ -63,6 +93,10 @@ export async function resolveMergeState(
   sleepFn: Sleep,
 ): Promise<string> {
   const deadline = Date.now() + pollSeconds * 1000;
+  if (!Number.isFinite(deadline)) {
+    throw new InputError(`Cannot poll for ${pollSeconds} seconds.`);
+  }
+
   let attempt = 0;
   let status = await client.mergeStateStatus(prNumber);
 
@@ -80,42 +114,50 @@ export async function resolveMergeState(
   return status;
 }
 
-export async function run(
+/** The decision itself. Throws; the caller applies the error policy. */
+export async function syncLabel(
   options: RunOptions,
   client: PullRequestClient,
-  sleepFn: Sleep = sleep,
+  sleepFn: Sleep,
 ): Promise<void> {
-  try {
-    if (options.eventName === 'merge_group') {
-      core.info('merge_group event, nothing to label.');
-      return;
-    }
+  if (options.eventName === 'merge_group') {
+    core.info('merge_group event, nothing to label.');
+    return;
+  }
 
-    if (options.prNumber === undefined) {
-      core.info('No pull request in context, nothing to label.');
-      return;
-    }
+  if (options.prNumber === undefined) {
+    core.info('No pull request in context, nothing to label.');
+    return;
+  }
 
-    const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
+  const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
 
-    if (status === UNKNOWN) {
-      core.notice(
-        `Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`,
-      );
-      return;
-    }
-
-    if (status === CONFLICTING) {
-      await client.addLabel(options.prNumber, options.label);
-      core.info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
-      return;
-    }
-
-    await client.removeLabel(options.prNumber, options.label);
-    core.info(
-      `Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`,
+  if (status === UNKNOWN) {
+    core.notice(
+      `Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`,
     );
+    return;
+  }
+
+  if (status === CONFLICTING) {
+    await client.addLabel(options.prNumber, options.label);
+    core.info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
+    return;
+  }
+
+  await client.removeLabel(options.prNumber, options.label);
+  core.info(
+    `Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`,
+  );
+}
+
+export async function run(inputs: ActionInputs, ctx: ActionContext, deps: RunDeps): Promise<void> {
+  try {
+    const options = resolveOptions(inputs, ctx);
+    const client = deps.createClient(resolveToken(inputs.token));
+    await syncLabel(options, client, deps.sleep ?? sleep);
+    core.setOutput('outcome', 'completed');
   } catch (error) {
-    applyErrorPolicy(error);
+    applyErrorPolicy(error, ctx.eventName);
   }
 }
