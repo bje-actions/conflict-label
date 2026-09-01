@@ -3,26 +3,18 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-    groups:
-      actions:
-        patterns:
-          - '*'
+      interval: daily
+    rebase-strategy: auto
+    commit-message:
+      prefix: chore
+      include: scope
 
   - package-ecosystem: npm
     directory: /
+    target-branch: main
     schedule:
-      interval: weekly
-    groups:
-      octokit:
-        patterns:
-          - '@octokit/*'
-          - '@actions/*'
-      tooling:
-        patterns:
-          - vitest
-          - '@vitest/*'
-          - '@vercel/ncc'
-          - typescript
-          - '@biomejs/*'
-          - '@types/*'
+      interval: daily
+    rebase-strategy: auto
+    commit-message:
+      prefix: chore
+      include: scope
