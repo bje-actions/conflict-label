@@ -18,6 +18,72 @@ Repositories then get the check with no per-repository configuration.
 This repository is public, which matters: a required workflow file has to live in a repository
 at least as visible as every repository it runs in.
 
+### Across one organization, with a ruleset
+
+An organization on Enterprise Cloud can require the workflow with an organization ruleset,
+without the enterprise being involved. Create a branch ruleset targeting the default branch of
+the repositories you want covered, and add a "Require workflows to pass before merging" rule
+pointing at this repository's `.github/workflows/pr-conflict-label.yml` at `refs/heads/main`.
+This repository is public, so any organization can reference it.
+
+Through the API, replacing `ORG`:
+
+```bash
+gh api -X POST /orgs/ORG/rulesets --input - <<'JSON'
+{
+  "name": "Conflict label",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] },
+    "repository_name": { "include": ["~ALL"], "exclude": [] }
+  },
+  "rules": [{
+    "type": "workflows",
+    "parameters": {
+      "do_not_enforce_on_create": true,
+      "workflows": [{
+        "repository_id": 1354009645,
+        "path": ".github/workflows/pr-conflict-label.yml",
+        "ref": "refs/heads/main"
+      }]
+    }
+  }]
+}
+JSON
+```
+
+Or with the `integrations/github` Terraform provider:
+
+```hcl
+resource "github_organization_ruleset" "conflict_label" {
+  name        = "Conflict label"
+  target      = "branch"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    required_workflows {
+      do_not_enforce_on_create = true
+
+      required_workflow {
+        repository_id = 1354009645
+        path          = ".github/workflows/pr-conflict-label.yml"
+        ref           = "main"
+      }
+    }
+  }
+}
+```
+
+`1354009645` is this repository's id (`gh api repos/bje-actions/conflict-label --jq .id`).
+
 ### In a single repository, with a caller workflow
 
 On a Team plan, or for a repository that wants to opt in explicitly, add a workflow that calls
