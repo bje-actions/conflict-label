@@ -20,7 +20,8 @@ jobs:
   sync:
     name: Sync conflict label
     if: github.event_name != 'merge_group'
-    runs-on: ubuntu-latest
+    # This job only runs the bundled JS action, so the smallest runner is plenty.
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - uses: bje-actions/conflict-label@main
