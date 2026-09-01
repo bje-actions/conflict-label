@@ -8,86 +8,32 @@ installed at run time and the only network dependency is the GitHub API.
 
 ## Setup
 
+Ready-to-import ruleset definitions live in [`rulesets/`](rulesets/). Each one is the JSON
+shape GitHub's ruleset import accepts and the API returns, so it can be uploaded through the
+UI ("Import a ruleset" on the rulesets page) or applied with the API or any provider that
+speaks it. All three target the default branch, enforce actively, and declare no bypass actors.
+
 ### Across a whole enterprise, with a ruleset
 
-Required workflows via rulesets are an Enterprise Cloud feature. Create a branch ruleset at
-the enterprise level targeting the default branch of every repository, and add a workflow rule
-pointing at this repository's `.github/workflows/pr-conflict-label.yml` at `refs/heads/main`.
-Repositories then get the check with no per-repository configuration.
+Required workflows via rulesets are an Enterprise Cloud feature. Import
+[`rulesets/enterprise-conflict-label.json`](rulesets/enterprise-conflict-label.json) at the
+enterprise level. It requires this repository's `.github/workflows/pr-conflict-label.yml` at
+`refs/heads/main` on the default branch of every repository in every organization, with no
+per-repository configuration.
 
 This repository is public, which matters: a required workflow file has to live in a repository
 at least as visible as every repository it runs in.
 
 ### Across one organization, with a ruleset
 
-An organization on Enterprise Cloud can require the workflow with an organization ruleset,
-without the enterprise being involved. Create a branch ruleset targeting the default branch of
-the repositories you want covered, and add a "Require workflows to pass before merging" rule
-pointing at this repository's `.github/workflows/pr-conflict-label.yml` at `refs/heads/main`.
-This repository is public, so any organization can reference it.
-
-Through the API, replacing `ORG`:
-
-```bash
-gh api -X POST /orgs/ORG/rulesets --input - <<'JSON'
-{
-  "name": "Conflict label",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {
-    "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] },
-    "repository_name": { "include": ["~ALL"], "exclude": [] }
-  },
-  "rules": [{
-    "type": "workflows",
-    "parameters": {
-      "do_not_enforce_on_create": true,
-      "workflows": [{
-        "repository_id": 1354009645,
-        "path": ".github/workflows/pr-conflict-label.yml",
-        "ref": "refs/heads/main"
-      }]
-    }
-  }]
-}
-JSON
-```
-
-Or with the `integrations/github` Terraform provider:
-
-```hcl
-resource "github_organization_ruleset" "conflict_label" {
-  name        = "Conflict label"
-  target      = "branch"
-  enforcement = "active"
-
-  conditions {
-    ref_name {
-      include = ["~DEFAULT_BRANCH"]
-      exclude = []
-    }
-  }
-
-  rules {
-    required_workflows {
-      do_not_enforce_on_create = true
-
-      required_workflow {
-        repository_id = 1354009645
-        path          = ".github/workflows/pr-conflict-label.yml"
-        ref           = "main"
-      }
-    }
-  }
-}
-```
-
-`1354009645` is this repository's id (`gh api repos/bje-actions/conflict-label --jq .id`).
+An organization on Enterprise Cloud can require the workflow on its own. Import
+[`rulesets/org-conflict-label.json`](rulesets/org-conflict-label.json) at the organization
+level. It is the same rule scoped to all repositories in that organization.
 
 ### In a single repository, with a caller workflow
 
-On a Team plan, or for a repository that wants to opt in explicitly, add a workflow that calls
-this one:
+Repository rulesets cannot require workflows, so a single repository (on any plan) opts in with
+a workflow that calls this one:
 
 ```yaml
 on: [pull_request_target]
@@ -99,6 +45,11 @@ jobs:
       pull-requests: write
       issues: write
 ```
+
+To make that check required, import
+[`rulesets/repo-conflict-label.json`](rulesets/repo-conflict-label.json) at the repository
+level. It requires the status check `conflict-label / Sync conflict label`, which is the name
+the caller job above produces. If you rename the caller job, update the context to match.
 
 Or use the action directly inside an existing job:
 
