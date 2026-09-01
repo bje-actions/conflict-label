@@ -6,6 +6,12 @@ the label is removed. The label is created on first use if the repository does n
 yet. It ships as a committed [ncc](https://github.com/vercel/ncc) bundle, so nothing is
 installed at run time and the only network dependency is the GitHub API.
 
+It is built to live in exactly one place. An enterprise ruleset requires the workflow in this
+repository on every pull request in every organization, so no repository has to carry a copy
+of the action or a workflow file, and updating this repository updates the check everywhere.
+The organization and repository paths below exist for accounts that cannot use enterprise
+rulesets; they are fallbacks, not the intended deployment.
+
 ## Setup
 
 Ready-to-import ruleset definitions live in [`rulesets/`](rulesets/). Each one is the JSON
@@ -13,20 +19,26 @@ shape GitHub's ruleset import accepts and the API returns, so it can be uploaded
 UI ("Import a ruleset" on the rulesets page) or applied with the API or any provider that
 speaks it. All three target the default branch, enforce actively, and declare no bypass actors.
 
-### Across a whole enterprise, with a ruleset
+### Across a whole enterprise, with a ruleset (recommended)
 
-Required workflows via rulesets are an Enterprise Cloud feature. Import
+This is the deployment the action is designed for. Import
 [`rulesets/enterprise-conflict-label.json`](rulesets/enterprise-conflict-label.json) at the
-enterprise level. It requires this repository's `.github/workflows/pr-conflict-label.yml` at
-`refs/heads/main` on the default branch of every repository in every organization, with no
-per-repository configuration.
+enterprise level (Policies > Code > Rulesets > Import a ruleset). GitHub then runs this
+repository's `.github/workflows/pr-conflict-label.yml` at `refs/heads/main` as a required
+check on the default branch of every repository in every organization.
+
+Nothing is added to any repository: no workflow file, no action reference, no secrets. The
+workflow is fetched from here at run time, so a change merged to `main` in this repository
+takes effect on the next pull request everywhere, with no rollout to individual repositories.
+Required workflows via rulesets are an Enterprise Cloud feature.
 
 This repository is public, which matters: a required workflow file has to live in a repository
 at least as visible as every repository it runs in.
 
-### Across one organization, with a ruleset
+### Across one organization, with a ruleset (fallback)
 
-An organization on Enterprise Cloud can require the workflow on its own. Import
+An organization on Enterprise Cloud that is not part of an enterprise ruleset can require the
+workflow on its own, still with nothing added to individual repositories. Import
 [`rulesets/org-conflict-label.json`](rulesets/org-conflict-label.json) at the organization
 level. It is the same rule scoped to all repositories in that organization.
 
@@ -40,10 +52,10 @@ the caller workflow never reports that check and cannot merge, so either add the
 everywhere or narrow the ruleset's `repository_name` condition to the repositories that have
 it.
 
-### In a single repository, with a caller workflow
+### In a single repository, with a caller workflow (fallback)
 
 Repository rulesets cannot require workflows, so a single repository (on any plan) opts in with
-a workflow that calls this one:
+a workflow that calls this one. This is the only path that puts a file in the repository:
 
 ```yaml
 on: [pull_request_target]
