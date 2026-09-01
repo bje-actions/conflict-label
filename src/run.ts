@@ -97,21 +97,19 @@ export async function resolveMergeState(
     throw new InputError(`Cannot poll for ${pollSeconds} seconds.`);
   }
 
-  let attempt = 0;
-  let status = await client.mergeStateStatus(prNumber);
+  for (let attempt = 0; ; attempt += 1) {
+    const status = await client.mergeStateStatus(prNumber);
+    if (status !== UNKNOWN) {
+      return status;
+    }
 
-  while (status === UNKNOWN) {
     const wait = backoffMs(attempt);
     if (Date.now() + wait > deadline) {
       return UNKNOWN;
     }
     core.info(`Merge state is UNKNOWN, retrying in ${wait / 1000}s.`);
     await sleepFn(wait);
-    attempt += 1;
-    status = await client.mergeStateStatus(prNumber);
   }
-
-  return status;
 }
 
 /** The decision itself. Throws; the caller applies the error policy. */
@@ -120,35 +118,35 @@ export async function syncLabel(
   client: PullRequestClient,
   sleepFn: Sleep,
 ): Promise<void> {
-  if (options.eventName === 'merge_group') {
+  const { eventName, prNumber, label, pollSeconds } = options;
+
+  if (eventName === 'merge_group') {
     core.info('merge_group event, nothing to label.');
     return;
   }
 
-  if (options.prNumber === undefined) {
+  if (prNumber === undefined) {
     core.info('No pull request in context, nothing to label.');
     return;
   }
 
-  const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
+  const status = await resolveMergeState(client, prNumber, pollSeconds, sleepFn);
 
   if (status === UNKNOWN) {
     core.notice(
-      `Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`,
+      `Merge state was still UNKNOWN after ${pollSeconds}s, leaving the "${label}" label untouched.`,
     );
     return;
   }
 
   if (status === CONFLICTING) {
-    await client.addLabel(options.prNumber, options.label);
-    core.info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
+    await client.addLabel(prNumber, label);
+    core.info(`Pull request #${prNumber} is conflicting, added "${label}".`);
     return;
   }
 
-  await client.removeLabel(options.prNumber, options.label);
-  core.info(
-    `Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`,
-  );
+  await client.removeLabel(prNumber, label);
+  core.info(`Pull request #${prNumber} is ${status}, removed "${label}" if present.`);
 }
 
 export async function run(inputs: ActionInputs, ctx: ActionContext, deps: RunDeps): Promise<void> {

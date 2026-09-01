@@ -17,5 +17,8 @@ run(
       createClient(createOctokit(token), { owner: context.repo.owner, repo: context.repo.repo }),
   },
 ).catch((error: unknown) => {
+  // run() already applies the policy to anything the action throws. This is the
+  // last resort that keeps a failure inside the policy itself from surfacing as
+  // an unhandled rejection.
   applyErrorPolicy(error, context.eventName);
 });

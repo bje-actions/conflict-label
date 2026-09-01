@@ -38896,6 +38896,10 @@ class ConfigurationError extends Error {
 class InputError extends ConfigurationError {
     name = 'InputError';
 }
+/**
+ * Lets an unknown value be probed for the fields Octokit errors carry, without
+ * every caller repeating the same cast.
+ */
 function shapeOf(error) {
     return typeof error === 'object' && error !== null ? error : {};
 }
@@ -38919,11 +38923,7 @@ function statusOf(error) {
  */
 function graphqlErrorsOf(error) {
     const shape = shapeOf(error);
-    const errors = Array.isArray(shape.errors)
-        ? shape.errors
-        : Array.isArray(shapeOf(shape.response).errors)
-            ? shapeOf(shape.response).errors
-            : [];
+    const errors = [shape.errors, shapeOf(shape.response).errors].find(Array.isArray) ?? [];
     return errors.filter((entry) => typeof entry === 'object' && entry !== null);
 }
 /** GraphQL error types that mean the token or the permissions block is wrong. */
@@ -38961,11 +38961,11 @@ function isConfigurationError(error) {
         return true;
     }
     const status = statusOf(error);
-    if (status === 403 && isRateLimited(error)) {
-        return false;
-    }
-    if (status === 401 || status === 403) {
+    if (status === 401) {
         return true;
+    }
+    if (status === 403) {
+        return !isRateLimited(error);
     }
     return graphqlErrorsOf(error).some((entry) => typeof entry.type === 'string' && CONFIGURATION_GRAPHQL_TYPES.has(entry.type));
 }
@@ -38977,13 +38977,13 @@ function describeError(error) {
     if (status !== undefined) {
         parts.push(`status ${status}`);
     }
-    const request = shape.request;
-    if (request?.method !== undefined || request?.url !== undefined) {
-        parts.push(`request ${String(request?.method ?? 'GET')} ${String(request?.url ?? 'unknown')}`);
+    const method = shape.request?.method;
+    const url = shape.request?.url;
+    if (method !== undefined || url !== undefined) {
+        parts.push(`request ${String(method ?? 'GET')} ${String(url ?? 'unknown')}`);
     }
-    const cause = shape.cause;
-    if (cause !== undefined && cause !== null) {
-        parts.push(`cause ${messageOf(cause)}`);
+    if (shape.cause !== undefined && shape.cause !== null) {
+        parts.push(`cause ${messageOf(shape.cause)}`);
     }
     const graphql = graphqlErrorsOf(error)
         .map((entry) => `${entry.type ?? 'ERROR'}: ${entry.message ?? 'no message'}`)
@@ -39059,8 +39059,8 @@ function labelNamesOf(response) {
 }
 /** GitHub says exactly this when the label is not on the pull request. */
 function isLabelNotApplied(error) {
-    const data = error?.response?.data;
-    return data?.message === 'Label does not exist';
+    const data = shapeOf(error).response?.data;
+    return shapeOf(data).message === 'Label does not exist';
 }
 function createClient(octokit, repo) {
     const slug = `${repo.owner}/${repo.repo}`;
@@ -39072,7 +39072,7 @@ function createClient(octokit, repo) {
                 number: prNumber,
             }));
             const pullRequest = data?.repository?.pullRequest;
-            if (data?.repository == null || pullRequest == null) {
+            if (pullRequest == null) {
                 // A readable token would have returned the node, so this is a wrong
                 // repository, a wrong number, or a token that cannot see either.
                 throw new ConfigurationError(`Pull request #${prNumber} not found in ${slug}.`);
@@ -39174,42 +39174,42 @@ async function resolveMergeState(client, prNumber, pollSeconds, sleepFn) {
     if (!Number.isFinite(deadline)) {
         throw new InputError(`Cannot poll for ${pollSeconds} seconds.`);
     }
-    let attempt = 0;
-    let status = await client.mergeStateStatus(prNumber);
-    while (status === UNKNOWN) {
+    for (let attempt = 0;; attempt += 1) {
+        const status = await client.mergeStateStatus(prNumber);
+        if (status !== UNKNOWN) {
+            return status;
+        }
         const wait = backoffMs(attempt);
         if (Date.now() + wait > deadline) {
             return UNKNOWN;
         }
         info(`Merge state is UNKNOWN, retrying in ${wait / 1000}s.`);
         await sleepFn(wait);
-        attempt += 1;
-        status = await client.mergeStateStatus(prNumber);
     }
-    return status;
 }
 /** The decision itself. Throws; the caller applies the error policy. */
 async function syncLabel(options, client, sleepFn) {
-    if (options.eventName === 'merge_group') {
+    const { eventName, prNumber, label, pollSeconds } = options;
+    if (eventName === 'merge_group') {
         info('merge_group event, nothing to label.');
         return;
     }
-    if (options.prNumber === undefined) {
+    if (prNumber === undefined) {
         info('No pull request in context, nothing to label.');
         return;
     }
-    const status = await resolveMergeState(client, options.prNumber, options.pollSeconds, sleepFn);
+    const status = await resolveMergeState(client, prNumber, pollSeconds, sleepFn);
     if (status === UNKNOWN) {
-        notice(`Merge state was still UNKNOWN after ${options.pollSeconds}s, leaving the "${options.label}" label untouched.`);
+        notice(`Merge state was still UNKNOWN after ${pollSeconds}s, leaving the "${label}" label untouched.`);
         return;
     }
     if (status === CONFLICTING) {
-        await client.addLabel(options.prNumber, options.label);
-        info(`Pull request #${options.prNumber} is conflicting, added "${options.label}".`);
+        await client.addLabel(prNumber, label);
+        info(`Pull request #${prNumber} is conflicting, added "${label}".`);
         return;
     }
-    await client.removeLabel(options.prNumber, options.label);
-    info(`Pull request #${options.prNumber} is ${status}, removed "${options.label}" if present.`);
+    await client.removeLabel(prNumber, label);
+    info(`Pull request #${prNumber} is ${status}, removed "${label}" if present.`);
 }
 async function run(inputs, ctx, deps) {
     try {
@@ -39237,6 +39237,9 @@ run({
 }, github_context, {
     createClient: (token) => createClient(createOctokit(token), { owner: github_context.repo.owner, repo: github_context.repo.repo }),
 }).catch((error) => {
+    // run() already applies the policy to anything the action throws. This is the
+    // last resort that keeps a failure inside the policy itself from surfacing as
+    // an unhandled rejection.
     applyErrorPolicy(error, github_context.eventName);
 });
 

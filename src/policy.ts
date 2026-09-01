@@ -22,7 +22,11 @@ interface ErrorShape {
   response?: { status?: unknown; headers?: Record<string, unknown>; data?: unknown } | undefined;
 }
 
-function shapeOf(error: unknown): ErrorShape {
+/**
+ * Lets an unknown value be probed for the fields Octokit errors carry, without
+ * every caller repeating the same cast.
+ */
+export function shapeOf(error: unknown): ErrorShape {
   return typeof error === 'object' && error !== null ? (error as ErrorShape) : {};
 }
 
@@ -52,11 +56,7 @@ interface GraphqlError {
  */
 export function graphqlErrorsOf(error: unknown): GraphqlError[] {
   const shape = shapeOf(error);
-  const errors = Array.isArray(shape.errors)
-    ? shape.errors
-    : Array.isArray(shapeOf(shape.response).errors)
-      ? (shapeOf(shape.response).errors as unknown[])
-      : [];
+  const errors = [shape.errors, shapeOf(shape.response).errors].find(Array.isArray) ?? [];
   return errors.filter(
     (entry): entry is GraphqlError => typeof entry === 'object' && entry !== null,
   );
@@ -100,11 +100,11 @@ export function isConfigurationError(error: unknown): boolean {
     return true;
   }
   const status = statusOf(error);
-  if (status === 403 && isRateLimited(error)) {
-    return false;
-  }
-  if (status === 401 || status === 403) {
+  if (status === 401) {
     return true;
+  }
+  if (status === 403) {
+    return !isRateLimited(error);
   }
   return graphqlErrorsOf(error).some(
     (entry) => typeof entry.type === 'string' && CONFIGURATION_GRAPHQL_TYPES.has(entry.type),
@@ -121,14 +121,14 @@ export function describeError(error: unknown): string {
     parts.push(`status ${status}`);
   }
 
-  const request = shape.request;
-  if (request?.method !== undefined || request?.url !== undefined) {
-    parts.push(`request ${String(request?.method ?? 'GET')} ${String(request?.url ?? 'unknown')}`);
+  const method = shape.request?.method;
+  const url = shape.request?.url;
+  if (method !== undefined || url !== undefined) {
+    parts.push(`request ${String(method ?? 'GET')} ${String(url ?? 'unknown')}`);
   }
 
-  const cause = shape.cause;
-  if (cause !== undefined && cause !== null) {
-    parts.push(`cause ${messageOf(cause)}`);
+  if (shape.cause !== undefined && shape.cause !== null) {
+    parts.push(`cause ${messageOf(shape.cause)}`);
   }
 
   const graphql = graphqlErrorsOf(error)

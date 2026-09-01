@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { retry } from '@octokit/plugin-retry';
 import { throttling } from '@octokit/plugin-throttling';
-import { ConfigurationError, statusOf } from './policy';
+import { ConfigurationError, shapeOf, statusOf } from './policy';
 
 /** How many times a rate limited request is retried before giving up. */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -93,8 +93,8 @@ function labelNamesOf(response: unknown): string[] {
 
 /** GitHub says exactly this when the label is not on the pull request. */
 function isLabelNotApplied(error: unknown): boolean {
-  const data = (error as { response?: { data?: { message?: unknown } } } | null)?.response?.data;
-  return data?.message === 'Label does not exist';
+  const data = shapeOf(error).response?.data;
+  return shapeOf(data).message === 'Label does not exist';
 }
 
 export function createClient(octokit: OctokitLike, repo: Repo): PullRequestClient {
@@ -109,7 +109,7 @@ export function createClient(octokit: OctokitLike, repo: Repo): PullRequestClien
       })) as MergeStateResponse;
 
       const pullRequest = data?.repository?.pullRequest;
-      if (data?.repository == null || pullRequest == null) {
+      if (pullRequest == null) {
         // A readable token would have returned the node, so this is a wrong
         // repository, a wrong number, or a token that cannot see either.
         throw new ConfigurationError(`Pull request #${prNumber} not found in ${slug}.`);
