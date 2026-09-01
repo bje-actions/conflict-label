@@ -1,0 +1,53 @@
+name: Rebuild dist
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    name: Rebuild dist on Dependabot pull requests
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Dependabot cannot run the build, so a bump to a runtime dependency would
+      # otherwise leave dist/ stale and fail the dist check in CI. The App token
+      # is required because pushes made with GITHUB_TOKEN do not retrigger CI.
+      - uses: actions/create-github-app-token@v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: pnpm/action-setup@v6.0.10
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Commit dist if it changed
+        run: |
+          if git diff --quiet dist/; then
+            echo 'dist is already up to date.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dist/
+          git commit -m 'chore: rebuild dist'
+          git push

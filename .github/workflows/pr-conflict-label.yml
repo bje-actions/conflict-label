@@ -1,0 +1,29 @@
+name: Conflict label
+
+on:
+  pull_request_target:
+  merge_group:
+  workflow_call:
+    inputs:
+      label:
+        type: string
+        default: conflicting
+      poll-seconds:
+        type: number
+        default: 120
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync conflict label
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: bje-actions/conflict-label@main
+        with:
+          label: ${{ inputs.label || 'conflicting' }}
+          poll-seconds: ${{ inputs.poll-seconds || 120 }}
