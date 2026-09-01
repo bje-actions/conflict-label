@@ -30,6 +30,16 @@ An organization on Enterprise Cloud can require the workflow on its own. Import
 [`rulesets/org-conflict-label.json`](rulesets/org-conflict-label.json) at the organization
 level. It is the same rule scoped to all repositories in that organization.
 
+An organization on the Team plan can create organization rulesets too, but the "require
+workflows" rule is Enterprise Cloud only, so the workflow cannot be injected from outside the
+repository. Instead, each repository adds the caller workflow from the next section, and the
+organization imports
+[`rulesets/org-team-conflict-label.json`](rulesets/org-team-conflict-label.json), which
+requires the status check that caller produces across the organization. A repository without
+the caller workflow never reports that check and cannot merge, so either add the caller
+everywhere or narrow the ruleset's `repository_name` condition to the repositories that have
+it.
+
 ### In a single repository, with a caller workflow
 
 Repository rulesets cannot require workflows, so a single repository (on any plan) opts in with
