@@ -57,7 +57,8 @@ jobs:
   smoke:
     name: Smoke test on this pull request
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    # A checkout and one bundled JS action, so the smallest runner is plenty.
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
