@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: pnpm/action-setup@v6.0.10
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - run: pnpm test --coverage
+
+      - uses: actions/upload-code-coverage@v1.4.2
+        with:
+          file: coverage/cobertura-coverage.xml
+          language: TypeScript
+          label: code-coverage/vitest
+
+      - name: dist must match src
+        run: |
+          pnpm build
+          git diff --exit-code dist/
+
+  smoke:
+    name: Smoke test on this pull request
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Run this build against this pull request
+        uses: ./
+        with:
+          label: smoke-test
