@@ -1,0 +1,21 @@
+# Hooks are installed by the `prepare` script on `pnpm install`.
+pre-commit:
+  commands:
+    biome:
+      glob: "*.{js,mjs,cjs,ts,json}"
+      exclude: ".claude/**"
+      run: pnpm biome check --write {staged_files}
+      stage_fixed: true
+    # dist/ is a committed build artifact that the action runs from. Rebuild
+    # it on every commit and stage the result, so src/ and dist/ can never
+    # drift. CI fails on any mismatch, which catches commits made with
+    # hooks bypassed.
+    build:
+      run: pnpm build && git add dist
+
+pre-push:
+  commands:
+    typecheck:
+      run: pnpm typecheck
+    test:
+      run: pnpm test --coverage

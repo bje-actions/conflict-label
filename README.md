@@ -88,13 +88,14 @@ the issues endpoints, and creating a missing label needs the issues scope. The w
 run on `pull_request_target` rather than `pull_request` so that pull requests from forks get a
 writable token; see [SECURITY.md](SECURITY.md) for why that is safe here.
 
-### Prerequisite for contributors to this repository
+### Contributing to this repository
 
-`.github/workflows/rebuild-dist.yml` needs `APP_ID` and `APP_PRIVATE_KEY` configured as
-**Dependabot** secrets (Settings > Secrets and variables > Dependabot), not Actions secrets,
-because a Dependabot-triggered run only reads the Dependabot store. Until they exist the rebuild job skips with a notice rather than failing, and CI's dist check still blocks a stale bundle. The App they identify must
-be installed on this repository with contents write. Without them, Dependabot pull requests
-that change a runtime dependency have to be rebuilt by hand.
+`pnpm install` installs [lefthook](https://github.com/evilmartians/lefthook) git hooks. The
+pre-commit hook runs biome on staged files and rebuilds `dist/` and stages it, so `src/` and
+the committed bundle cannot drift; the pre-push hook runs typecheck and the full test suite.
+CI fails on any `dist/` mismatch, which catches commits made with hooks bypassed and
+Dependabot bumps to runtime dependencies. Fix either by checking out the branch, running
+`pnpm build`, and committing `dist/`.
 
 ## What it does
 
@@ -135,10 +136,11 @@ pnpm test --coverage
 pnpm build
 ```
 
-`dist/` is committed and CI fails if it does not match the sources, so run `pnpm build` and
-commit the result with any change under `src/`. Dependabot bumps to runtime dependencies are
-rebuilt automatically by `.github/workflows/rebuild-dist.yml`. Pushing to a Dependabot branch
-stops Dependabot rebasing it automatically, so a stale bump has to be closed and reopened.
+`dist/` is committed and CI fails if it does not match the sources. The pre-commit hook runs
+`pnpm build` and stages `dist/` for you. Dependabot cannot run the build, so a Dependabot bump
+to a runtime dependency fails the dist check until someone checks out the branch, runs
+`pnpm build`, and commits `dist/`. Pushing to a Dependabot branch stops Dependabot rebasing it,
+so finish that pull request by hand once you touch it.
 
 Coverage is measured with vitest and the v8 provider, reported as Cobertura, and uploaded so
 the enterprise Code Coverage ruleset can read it. The threshold is 100% for lines, branches,

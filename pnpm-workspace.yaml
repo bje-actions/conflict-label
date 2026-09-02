@@ -1,0 +1,4 @@
+# lefthook's postinstall only installs git hooks; the `prepare` script does
+# that explicitly, so its build script stays blocked.
+allowBuilds:
+  lefthook: false
