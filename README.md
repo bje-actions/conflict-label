@@ -92,7 +92,7 @@ writable token; see [SECURITY.md](SECURITY.md) for why that is safe here.
 
 `.github/workflows/rebuild-dist.yml` needs `APP_ID` and `APP_PRIVATE_KEY` configured as
 **Dependabot** secrets (Settings > Secrets and variables > Dependabot), not Actions secrets,
-because a Dependabot-triggered run only reads the Dependabot store. The App they identify must
+because a Dependabot-triggered run only reads the Dependabot store. Until they exist the rebuild job skips with a notice rather than failing, and CI's dist check still blocks a stale bundle. The App they identify must
 be installed on this repository with contents write. Without them, Dependabot pull requests
 that change a runtime dependency have to be rebuilt by hand.
 

@@ -24,7 +24,21 @@ jobs:
       # configured under Settings > Secrets and variables > Dependabot. The
       # trigger stays pull_request: pull_request_target would run this
       # checkout-and-build against untrusted content with a writable token.
+      # Until those secrets exist, skip instead of failing: this job is a
+      # convenience, and the dist-matches-source check in ci.yml is the gate
+      # that keeps a stale bundle off main.
+      - name: Check for App credentials
+        id: creds
+        env:
+          PRESENT: ${{ secrets.APP_ID != '' && secrets.APP_PRIVATE_KEY != '' }}
+        run: |
+          echo "present=$PRESENT" >> "$GITHUB_OUTPUT"
+          if [ "$PRESENT" != "true" ]; then
+            echo "::notice::APP_ID and APP_PRIVATE_KEY are not configured as Dependabot secrets; skipping the dist rebuild. Rebuild dist by hand if this pull request changes a runtime dependency."
+          fi
+
       - uses: actions/create-github-app-token@v3.2.0
+        if: steps.creds.outputs.present == 'true'
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -32,23 +46,29 @@ jobs:
           permission-contents: write
 
       - uses: actions/checkout@v7.0.1
+        if: steps.creds.outputs.present == 'true'
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: pnpm/action-setup@v6.0.10
+        if: steps.creds.outputs.present == 'true'
 
       - uses: actions/setup-node@v7.0.0
+        if: steps.creds.outputs.present == 'true'
         with:
           node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+        if: steps.creds.outputs.present == 'true'
 
       - run: pnpm build
+        if: steps.creds.outputs.present == 'true'
 
       - name: Commit dist if it changed
+        if: steps.creds.outputs.present == 'true'
         env:
           # Commits are attributed to the App's own bot user, so the identity
           # matches the token that pushes them.

@@ -18,3 +18,7 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # The action runs on the node24 runtime; keep the types on the same major.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
