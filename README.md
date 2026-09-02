@@ -151,6 +151,8 @@ MIT. See [LICENSE](LICENSE).
 
 ## Further reading
 
+- [ADR 0001: deploy as an enterprise-required workflow](docs/adr/0001-required-workflow-deployment.md)
+
 - [SECURITY.md](SECURITY.md): why this is safe to run on `pull_request_target`, and the rules
   that keep it that way.
 - [ARCHITECTURE.md](ARCHITECTURE.md): the reliability contract, the failure policy, and why
