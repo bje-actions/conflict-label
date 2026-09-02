@@ -80,8 +80,11 @@ until they receive a push or are closed and reopened.
   to `main` here affects merging everywhere, which is why CI runs typecheck,
   lint, tests at 100% coverage, a dist-matches-source check, and a live smoke
   run of the pull request's own build before merge.
-- `dist/` is committed and must be rebuilt when runtime dependencies change.
-  `rebuild-dist.yml` does that for Dependabot pull requests once `APP_ID` and
-  `APP_PRIVATE_KEY` exist as Dependabot secrets.
+- `dist/` is committed and must be rebuilt whenever `src/` or a runtime
+  dependency changes. A lefthook pre-commit hook rebuilds and stages it, and
+  CI fails on any mismatch. A Dependabot bump to a runtime dependency needs a
+  manual rebuild commit before it can merge. This replaced an earlier design
+  that rebuilt `dist/` in a workflow with a GitHub App token, dropped to avoid
+  maintaining an App and its secrets for one job.
 - The base-branch-triggered sweep, including auto-rebase, is a separate
   action tracked in bje-settings/github#2 and is not part of this deployment.

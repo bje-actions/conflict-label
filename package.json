@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome ci .",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "lefthook install"
   },
   "dependencies": {
     "@actions/core": "3.0.1",
@@ -27,6 +28,7 @@
     "@types/node": "^24.13.3",
     "@vercel/ncc": "0.45.0",
     "@vitest/coverage-v8": "4.1.11",
+    "lefthook": "2.1.12",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }

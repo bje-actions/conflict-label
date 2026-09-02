@@ -35,15 +35,9 @@ different trust boundary: it runs on `pull_request`, where a fork's token is rea
 secrets are exposed to fork pull requests. The smoke job that runs the action against the pull
 request itself is skipped for forks for the same reason.
 
-`rebuild-dist.yml` is the one workflow that both checks out a pull request head and holds a
-writable App token. It is guarded three ways:
-
-- It runs on `pull_request`, never `pull_request_target`.
-- The whole job is gated on `github.actor == 'dependabot[bot]'`.
-- The App token is minted with `permission-contents: write` only.
-
-Its secrets live in the Dependabot secrets store, so an ordinary pull request cannot reach
-them even if the actor guard were bypassed.
+No workflow in this repository holds a writable token while checking out pull request content.
+`dist/` is rebuilt by a local pre-commit hook and verified by CI rather than by a workflow
+pushing commits, so there is no App identity or long-lived credential to protect.
 
 ## Reporting a vulnerability
 

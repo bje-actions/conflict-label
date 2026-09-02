@@ -52,7 +52,10 @@ jobs:
           pnpm build
           # --intent-to-add so a brand new bundle file counts as a difference.
           git add --intent-to-add dist
-          git diff --exit-code dist
+          if ! git diff --exit-code dist; then
+            echo "::error::dist/ does not match src/. Run pnpm build and commit dist/. The lefthook pre-commit hook does this on every commit, so this usually means hooks were bypassed or a dependency bump landed without a rebuild."
+            exit 1
+          fi
 
   smoke:
     name: Smoke test on this pull request
