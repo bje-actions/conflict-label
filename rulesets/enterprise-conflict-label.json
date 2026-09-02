@@ -4,6 +4,14 @@
   "enforcement": "active",
   "bypass_actors": [],
   "conditions": {
+    "organization_name": {
+      "include": ["~ALL"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": ["~ALL"],
+      "exclude": []
+    },
     "ref_name": {
       "include": ["~DEFAULT_BRANCH"],
       "exclude": []
