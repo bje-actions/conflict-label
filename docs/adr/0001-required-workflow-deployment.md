@@ -63,6 +63,10 @@ Performed on 2026-09-01 after the ruleset was created:
   merged, a push to the other one produced DIRTY and the label was added with
   the check still passing; resolving the conflict and pushing again produced
   CLEAN and the label was removed.
+- Fork pull request (a fork of the sandbox on a personal account): the run
+  fired on `pull_request_target` with the fork as head repository, and the
+  label write used a writable token (the removal returned 404 "not on the pull
+  request", not 403).
 - The rule reaches repositories in every org: the branch rules endpoint on
   bork-ltd, arsenalamerica, bje-co, and bje-settings repositories all report
   the workflow.
