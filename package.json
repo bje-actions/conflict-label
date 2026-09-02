@@ -1,0 +1,33 @@
+{
+  "name": "conflict-label",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action that keeps a conflicting label in sync with a pull request mergeStateStatus",
+  "license": "MIT",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && ncc build build/main.js -o dist --license licenses.txt",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "format": "biome format --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@actions/core": "3.0.1",
+    "@actions/github": "9.1.1",
+    "@octokit/plugin-retry": "8.1.1",
+    "@octokit/plugin-throttling": "11.0.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@octokit/request-error": "7.1.2",
+    "@types/node": "^24.13.3",
+    "@vercel/ncc": "0.45.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # actions/upload-code-coverage writes a code quality report against the
+      # head commit, which the calling job has to grant explicitly.
+      code-quality: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # Coverage is reported against the head commit, not the merge commit
+          # that pull_request checks out by default.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: pnpm/action-setup@v6.0.10
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - run: pnpm test --coverage
+
+      - uses: actions/upload-code-coverage@v1.4.2
+        with:
+          file: coverage/cobertura-coverage.xml
+          language: TypeScript
+          label: code-coverage/vitest
+
+      - name: dist must match src
+        run: |
+          pnpm build
+          # --intent-to-add so a brand new bundle file counts as a difference.
+          git add --intent-to-add dist
+          git diff --exit-code dist
+
+  smoke:
+    name: Smoke test on this pull request
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # A checkout and one bundled JS action, so the smallest runner is plenty.
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # The smoke-test label must not be pre-created on this repository: leaving
+      # it absent is what exercises the create-on-add path.
+      - name: Run this build against this pull request
+        id: smoke
+        uses: ./
+        with:
+          label: smoke-test
+
+      - name: The smoke test must have completed, not failed open
+        run: test "${{ steps.smoke.outputs.outcome }}" = "completed"
+

@@ -1,0 +1,28 @@
+name: 'Conflict label'
+description: 'Keeps a label in sync with a pull request merge state, adding it when the PR is conflicting and removing it when it is not.'
+author: 'bje-actions'
+branding:
+  icon: 'git-merge'
+  color: 'orange'
+inputs:
+  label:
+    description: 'Name of the label to add when the pull request is conflicting.'
+    required: false
+    default: 'conflicting'
+  poll-seconds:
+    description: 'How long to keep polling while GitHub reports an UNKNOWN merge state.'
+    required: false
+    default: '120'
+  pr-number:
+    description: 'Pull request number. Defaults to the pull request that triggered the run.'
+    required: false
+  token:
+    description: 'Token used for the GraphQL and REST calls. Needs pull-requests: write and issues: write.'
+    required: false
+    default: ${{ github.token }}
+outputs:
+  outcome:
+    description: 'completed when the label was synced, failed-open when an error was tolerated, failed when the run failed closed.'
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
