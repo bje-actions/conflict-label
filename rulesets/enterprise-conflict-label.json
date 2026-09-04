@@ -13,7 +13,7 @@
       "exclude": []
     },
     "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
+      "include": ["~ALL"],
       "exclude": []
     }
   },
