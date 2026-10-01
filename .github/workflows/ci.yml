@@ -41,7 +41,7 @@ jobs:
 
       - run: pnpm test --coverage
 
-      - uses: actions/upload-code-coverage@v1.4.2
+      - uses: actions/upload-code-coverage@v1.4.3
         with:
           file: coverage/cobertura-coverage.xml
           language: TypeScript
